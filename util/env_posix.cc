@@ -26,6 +26,7 @@
 #include <thread>
 #include <type_traits>
 #include <utility>
+#include <iostream>
 
 #include "leveldb/env.h"
 #include "leveldb/slice.h"
@@ -34,6 +35,7 @@
 #include "port/thread_annotations.h"
 #include "util/env_posix_test_helper.h"
 #include "util/posix_logger.h"
+#include "umap/umap.h"
 
 namespace leveldb {
 
@@ -216,15 +218,17 @@ class PosixMmapReadableFile final : public RandomAccessFile {
   // |mmap_limiter| must outlive this instance. The caller must have already
   // aquired the right to use one mmap region, which will be released when this
   // instance is destroyed.
-  PosixMmapReadableFile(std::string filename, char* mmap_base, size_t length,
+  PosixMmapReadableFile(std::string filename, int fd, char* mmap_base, size_t length,
                         Limiter* mmap_limiter)
       : mmap_base_(mmap_base),
         length_(length),
         mmap_limiter_(mmap_limiter),
-        filename_(std::move(filename)) {}
+        filename_(std::move(filename)),
+        fd_(fd) {}
 
   ~PosixMmapReadableFile() override {
-    ::munmap(static_cast<void*>(mmap_base_), length_);
+    ::uunmap(static_cast<void*>(mmap_base_), length_);
+    ::close(fd_);
     mmap_limiter_->Release();
   }
 
@@ -241,6 +245,7 @@ class PosixMmapReadableFile final : public RandomAccessFile {
 
  private:
   char* const mmap_base_;
+  const int fd_;
   const size_t length_;
   Limiter* const mmap_limiter_;
   const std::string filename_;
@@ -525,17 +530,25 @@ class PosixEnv : public Env {
     uint64_t file_size;
     Status status = GetFileSize(filename, &file_size);
     if (status.ok()) {
-      void* mmap_base =
-          ::mmap(/*addr=*/nullptr, file_size, PROT_READ, MAP_SHARED, fd, 0);
+//       std::cout << "map " << filename << " " << file_size << std::endl;
+      //UMAP
+      if (file_size % 4096) {
+          file_size = (file_size & ~(4096-1)) + 4096;
+      }
+      if (!file_size) { file_size = 4096; }
+      ftruncate(fd, file_size);
+//       std::cout << "MAP_SZ " << filename << " " << file_size << std::endl;
+      void* mmap_base = umap(/*addr=*/nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+//       void* mmap_base = mmap(/*addr=*/nullptr, file_size, PROT_READ, MAP_SHARED, fd, 0);
       if (mmap_base != MAP_FAILED) {
-        *result = new PosixMmapReadableFile(filename,
+        *result = new PosixMmapReadableFile(filename, fd,
                                             reinterpret_cast<char*>(mmap_base),
                                             file_size, &mmap_limiter_);
       } else {
         status = PosixError(filename, errno);
       }
     }
-    ::close(fd);
+//    ::close(fd);
     if (!status.ok()) {
       mmap_limiter_.Release();
     }

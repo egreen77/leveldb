@@ -474,3 +474,6 @@ if(LEVELDB_INSTALL)
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/leveldb"
   )
 endif(LEVELDB_INSTALL)
+
+target_link_libraries(leveldb umap)
+target_link_libraries(leveldbutil umap)
